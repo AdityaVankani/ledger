@@ -1,0 +1,7 @@
+.env
+bin/
+tmp/
+coverage.out
+web/node_modules/
+web/dist/
+

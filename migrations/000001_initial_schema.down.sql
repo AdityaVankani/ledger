@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS settlements;
+DROP TABLE IF EXISTS expense_splits;
+DROP TABLE IF EXISTS expenses;
+DROP TABLE IF EXISTS group_members;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS users;
+DROP FUNCTION IF EXISTS validate_expense_split_total_from_split();
+DROP FUNCTION IF EXISTS validate_expense_split_total_from_expense();
+DROP FUNCTION IF EXISTS assert_expense_split_total(UUID);
+DROP FUNCTION IF EXISTS set_updated_at();
+DROP EXTENSION IF EXISTS pgcrypto;
