@@ -170,7 +170,129 @@ function AuthScreen({ onSignedIn }) { const [mode, setMode] = useState('login');
 function Modal({ title, eyebrow, children, onClose }) { return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="modal"><button className="modal-close" onClick={onClose} aria-label="Close"><X size={19} /></button><span className="eyebrow">{eyebrow}</span><h2>{title}</h2>{children}</div></div> }
 function GroupModal({ api, onClose, onCreated }) { const [name, setName] = useState(''); const [error, setError] = useState(''); async function submit(e) { e.preventDefault(); try { const group = await api('/v1/groups', { method: 'POST', body: JSON.stringify({ name }) }); onCreated(group) } catch (err) { setError(err.message) } } return <Modal title="Create a new space" eyebrow="New shared ledger" onClose={onClose}><form onSubmit={submit}><label>Space name<input autoFocus required value={name} onChange={(e) => setName(e.target.value)} placeholder="Weekend in Goa" /></label>{error && <div className="form-error">{error}</div>}<button className="primary-button wide">Create space <ArrowUpRight size={17} /></button></form></Modal> }
 function MemberModal({ api, group, onClose, onCreated }) { const [email, setEmail] = useState(''); const [error, setError] = useState(''); async function submit(e) { e.preventDefault(); try { await api(`/v1/groups/${group.id}/members`, { method: 'POST', body: JSON.stringify({ email }) }); onCreated() } catch (err) { setError(err.message) } } return <Modal title="Bring someone in" eyebrow={`Invite to ${group.name}`} onClose={onClose}><form onSubmit={submit}><label>Email address<input autoFocus required type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="friend@example.com" /></label><p className="modal-note">They need an account before they can join this space.</p>{error && <div className="form-error">{error}</div>}<button className="primary-button wide">Add to circle <Users size={17} /></button></form></Modal> }
-function ExpenseModal({ api, group, members, user, expense, onClose, onCreated }) { const [form, setForm] = useState(() => ({ ...initialForm, description: expense?.description || '', amount_cents: expense ? expense.amount_cents / 100 : '', currency: expense?.currency || 'INR', expense_date: expense?.expense_date || initialForm.expense_date, paid_by_user_id: expense?.paid_by_user_id || expense?.paid_by?.id || user?.id, splits: expense ? expense.splits.map((split) => ({ user_id: split.user.id, amount_cents: split.amount_cents / 100 })) : members.map((member) => ({ user_id: member.id, amount_cents: '' })) })); const [error, setError] = useState(''); function setField(field, value) { setForm({ ...form, [field]: value }) } function setSplit(id, value) { setForm({ ...form, splits: form.splits.map((split) => split.user_id === id ? { ...split, amount_cents: value } : split) }) } async function submit(e) { e.preventDefault(); const amountCents = rupeesToCents(form.amount_cents); const splits = form.splits.filter((split) => Number(split.amount_cents) > 0).map((split) => ({ ...split, amount_cents: rupeesToCents(split.amount_cents) })); if (!amountCents || splits.reduce((total, split) => total + split.amount_cents, 0) !== amountCents) { setError('Split amounts must add up to the total amount.'); return } try { await api(`/v1/groups/${group.id}/expenses${expense ? `/${expense.id}` : ''}`, { method: expense ? 'PATCH' : 'POST', body: JSON.stringify({ ...form, amount_cents: amountCents, splits }) }); onCreated() } catch (err) { setError(err.message) } } return <Modal title={expense ? 'Edit expense' : 'Add an expense'} eyebrow={expense ? 'Update ledger entry' : 'New ledger entry'} onClose={onClose}><form onSubmit={submit} className="expense-form"><label>What was it for?<input autoFocus required value={form.description} onChange={(e) => setField('description', e.target.value)} placeholder="Dinner at Little Italy" /></label><div className="form-row"><label>Amount (₹)<input required type="number" min="0.01" step="0.01" value={form.amount_cents} onChange={(e) => setField('amount_cents', e.target.value)} placeholder="100" /></label><label>Currency<input maxLength="3" required value={form.currency} onChange={(e) => setField('currency', e.target.value.toUpperCase())} /></label></div><label>Paid by<select value={form.paid_by_user_id} onChange={(e) => setField('paid_by_user_id', e.target.value)}>{members.map((member) => <option key={member.id} value={member.id}>{member.display_name}</option>)}</select></label><div className="split-label"><span>Split between</span><small>Enter rupees</small></div><div className="split-fields">{members.map((member) => <label key={member.id}><span className="avatar tiny">{initials(member.display_name)}</span><span>{member.display_name}</span><input type="number" min="0" step="0.01" value={form.splits.find((split) => split.user_id === member.id)?.amount_cents || ''} onChange={(e) => setSplit(member.id, e.target.value)} placeholder="0" /></label>)}</div>{error && <div className="form-error">{error}</div>}<button className="primary-button wide">{expense ? 'Update expense' : 'Save expense'} <ReceiptText size={17} /></button></form></Modal> }
+function ExpenseModal({ api, group, members, user, expense, onClose, onCreated }) {
+  const buildEqualSplits = (amountValue, memberList) => {
+    const amount = Number(amountValue || 0)
+    const totalCents = Math.round(amount * 100)
+    if (!memberList.length || !totalCents) {
+      return memberList.map((member) => ({ user_id: member.id, amount_cents: '' }))
+    }
+    const base = Math.floor(totalCents / memberList.length)
+    const remainder = totalCents - (base * memberList.length)
+    return memberList.map((member, index) => ({
+      user_id: member.id,
+      amount_cents: ((index === 0 ? base + remainder : base) / 100).toFixed(2),
+    }))
+  }
+
+  const buildPercentageSplits = (amountValue, memberList, percentageMap) => {
+    const amount = Number(amountValue || 0)
+    const totalCents = Math.round(amount * 100)
+    if (!memberList.length || !totalCents) {
+      return memberList.map((member) => ({ user_id: member.id, amount_cents: '' }))
+    }
+
+    const totalPercent = memberList.reduce((sum, member) => sum + (Number(percentageMap[member.id]) || 0), 0)
+    if (!totalPercent) {
+      return buildEqualSplits(amountValue, memberList)
+    }
+
+    let remainingCents = totalCents
+    const parts = memberList.map((member, index) => {
+      const share = Number(percentageMap[member.id]) || 0
+      const raw = (totalCents * share) / totalPercent
+      const rounded = index === memberList.length - 1 ? remainingCents : Math.round(raw)
+      remainingCents -= rounded
+      return {
+        user_id: member.id,
+        amount_cents: (rounded / 100).toFixed(2),
+      }
+    })
+
+    return parts
+  }
+
+  const [form, setForm] = useState(() => ({
+    ...initialForm,
+    description: expense?.description || '',
+    amount_cents: expense ? expense.amount_cents / 100 : '',
+    currency: expense?.currency || 'INR',
+    expense_date: expense?.expense_date || initialForm.expense_date,
+    paid_by_user_id: expense?.paid_by_user_id || expense?.paid_by?.id || user?.id,
+    splits: expense ? expense.splits.map((split) => ({ user_id: split.user.id, amount_cents: split.amount_cents / 100 })) : members.map((member) => ({ user_id: member.id, amount_cents: '' })),
+  }))
+  const [splitMode, setSplitMode] = useState(expense ? 'custom' : 'equal')
+  const [percentageInputs, setPercentageInputs] = useState(() => Object.fromEntries(members.map((member) => [member.id, members.length ? Number((100 / members.length).toFixed(2)) : 0])))
+  const [error, setError] = useState('')
+
+  function setField(field, value) {
+    const next = { ...form, [field]: value }
+    if (field === 'amount_cents' && splitMode !== 'custom') {
+      next.splits = splitMode === 'equal'
+        ? buildEqualSplits(value, members)
+        : buildPercentageSplits(value, members, percentageInputs)
+      setForm(next)
+      return
+    }
+    setForm(next)
+  }
+
+  function setSplit(id, value) {
+    setForm({
+      ...form,
+      splits: form.splits.map((split) => split.user_id === id ? { ...split, amount_cents: value } : split),
+    })
+  }
+
+  function updatePercentage(id, value) {
+    const sanitized = Math.max(0, Number(value) || 0)
+    const nextPercentages = { ...percentageInputs, [id]: sanitized }
+    setPercentageInputs(nextPercentages)
+    if (splitMode === 'percentage') {
+      setForm({
+        ...form,
+        splits: buildPercentageSplits(form.amount_cents, members, nextPercentages),
+      })
+    }
+  }
+
+  function applySplitMode(mode) {
+    if (!members.length) {
+      setSplitMode(mode)
+      return
+    }
+
+    if (mode === 'equal') {
+      setForm({ ...form, splits: buildEqualSplits(form.amount_cents, members) })
+    } else if (mode === 'percentage') {
+      setForm({ ...form, splits: buildPercentageSplits(form.amount_cents, members, percentageInputs) })
+    } else {
+      setForm({
+        ...form,
+        splits: form.splits.length ? form.splits : members.map((member) => ({ user_id: member.id, amount_cents: '' })),
+      })
+    }
+
+    setSplitMode(mode)
+  }
+
+  async function submit(e) {
+    e.preventDefault();
+    const amountCents = rupeesToCents(form.amount_cents)
+    const splits = form.splits.filter((split) => Number(split.amount_cents) > 0).map((split) => ({ ...split, amount_cents: rupeesToCents(split.amount_cents) }))
+    if (!amountCents || splits.reduce((total, split) => total + split.amount_cents, 0) !== amountCents) {
+      setError('Split amounts must add up to the total amount.')
+      return
+    }
+    try {
+      await api(`/v1/groups/${group.id}/expenses${expense ? `/${expense.id}` : ''}`, { method: expense ? 'PATCH' : 'POST', body: JSON.stringify({ ...form, amount_cents: amountCents, splits }) })
+      onCreated()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  return <Modal title={expense ? 'Edit expense' : 'Add an expense'} eyebrow={expense ? 'Update ledger entry' : 'New ledger entry'} onClose={onClose}><form onSubmit={submit} className="expense-form"><label>What was it for?<input autoFocus required value={form.description} onChange={(e) => setField('description', e.target.value)} placeholder="Dinner at Little Italy" /></label><div className="form-row"><label>Amount (₹)<input required type="number" min="0.01" step="0.01" value={form.amount_cents} onChange={(e) => setField('amount_cents', e.target.value)} placeholder="1200" /></label><label>Currency<input maxLength="3" required value={form.currency} onChange={(e) => setField('currency', e.target.value.toUpperCase())} /></label></div><div className="split-section"><div className="split-header"><h3>Split</h3><select value={splitMode} onChange={(e) => applySplitMode(e.target.value)}><option value="equal">Equal</option><option value="percentage">Percentage</option><option value="custom">Custom</option></select></div>{splitMode === 'percentage' && <div className="split-percentages">{members.map((member) => <label key={member.id}>{member.display_name}<input type="number" min="0" max="100" step="1" value={percentageInputs[member.id] || 0} onChange={(e) => updatePercentage(member.id, e.target.value)} /></label>)}</div>}{splitMode === 'custom' ? <div className="split-list">{form.splits.map((split) => { const member = members.find((item) => item.id === split.user_id); if (!member) return null; return <div className="split-row" key={split.user_id}><span>{member.display_name}</span><input type="number" min="0" step="0.01" value={split.amount_cents} onChange={(e) => setSplit(split.user_id, e.target.value)} /></div> })}</div> : <div className="split-list">{form.splits.map((split) => { const member = members.find((item) => item.id === split.user_id); if (!member) return null; return <div className="split-row" key={split.user_id}><span>{member.display_name}</span><input type="number" min="0" step="0.01" value={split.amount_cents} readOnly /></div> })}</div>}</div><label>Paid by<select value={form.paid_by_user_id} onChange={(e) => setField('paid_by_user_id', e.target.value)}>{members.map((member) => <option key={member.id} value={member.id}>{member.display_name}</option>)}</select></label><label>Expense date<input type="date" value={form.expense_date} onChange={(e) => setField('expense_date', e.target.value)} /></label>{error && <div className="form-error">{error}</div>}<button className="primary-button wide">{expense ? 'Save changes' : 'Add expense'} <ArrowUpRight size={17} /></button></form></Modal> }
 
 function PreferencesModal({ user, api, onSaved, onClose }) { const [upiID, setUpiID] = useState(user?.upi_id || ''); const [error, setError] = useState(''); async function save(event) { event.preventDefault(); try { await api('/v1/me', { method: 'PATCH', body: JSON.stringify({ upi_id: upiID.trim() }) }); onSaved() } catch (err) { setError(err.message) } } return <Modal title="Preferences" eyebrow="Your account" onClose={onClose}><form onSubmit={save}><div className="preference-list"><div><span>Signed in as</span><strong>{user?.email}</strong></div><label>UPI ID<input value={upiID} onChange={(event) => setUpiID(event.target.value)} placeholder="yourname@upi" /></label><div><span>Default currency</span><strong>INR</strong></div></div>{error && <div className="form-error">{error}</div>}<button className="primary-button wide">Save UPI ID <Check size={17} /></button></form></Modal> }
 function SettlementModal({ api, group, suggestion, onClose, onCreated }) { const [note, setNote] = useState(''); const [error, setError] = useState(''); async function submit(event) { event.preventDefault(); try { await api(`/v1/groups/${group.id}/settlements`, { method: 'POST', body: JSON.stringify({ received_by_user_id: suggestion.to.id, amount_cents: suggestion.amount_cents, currency: suggestion.currency, note }) }); onCreated() } catch (err) { setError(err.message) } } return <Modal title="Record payment" eyebrow="Settlement / UPI note" onClose={onClose}><div className="settlement-summary"><span className="avatar small">{initials(suggestion.from.display_name)}</span><strong>{suggestion.from.display_name}</strong><ArrowUpRight size={16} /><span className="avatar small mint">{initials(suggestion.to.display_name)}</span><strong>{suggestion.to.display_name}</strong><b>{money(suggestion.amount_cents, suggestion.currency)}</b></div><div className="upi-destination"><span>Pay to UPI ID</span><strong>{suggestion.to.upi_id || 'Receiver has not added a UPI ID yet'}</strong></div><form onSubmit={submit}><label>Payment note (optional)<input autoFocus value={note} onChange={(event) => setNote(event.target.value)} placeholder="UPI payment, cash, bank transfer" /></label>{error && <div className="form-error">{error}</div>}<button className="primary-button wide"><Check size={17} /> Mark as paid</button></form></Modal> }
