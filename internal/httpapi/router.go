@@ -44,11 +44,18 @@ func NewRouter(pool *pgxpool.Pool, sessionTTL time.Duration, allowedOrigin strin
 func withCORS(next http.Handler, allowedOrigin string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if allowedOrigin != "" && origin != "" && strings.TrimSpace(origin) == strings.TrimSpace(allowedOrigin) {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+		if origin != "" {
+			allowedOrigins := strings.Split(allowedOrigin, ",")
+			for _, candidate := range allowedOrigins {
+				trimmed := strings.TrimSpace(candidate)
+				if trimmed != "" && strings.TrimSpace(origin) == trimmed {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Set("Vary", "Origin")
+					w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+					w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+					break
+				}
+			}
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
