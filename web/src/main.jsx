@@ -180,7 +180,7 @@ function AuthScreen({ onSignedIn }) {
     try {
       if (mode === 'forgot') {
         const result = await request('/v1/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: form.email.trim() }) })
-        setNotice(result.reset_token ? `${result.message} For local development, use this reset token: ${result.reset_token}` : result.message)
+        setNotice(result.reset_token ? `${result.message} For pre-prod development, use this reset token: ${result.reset_token}` : result.message)
       } else if (isReset) {
         const result = await request('/v1/auth/reset-password', { method: 'POST', body: JSON.stringify({ token: form.token.trim(), password: form.password }) })
         setNotice(result.message); setMode('login')
