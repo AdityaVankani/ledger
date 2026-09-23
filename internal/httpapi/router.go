@@ -22,6 +22,8 @@ func NewRouter(pool *pgxpool.Pool, sessionTTL time.Duration, allowedOrigin strin
 	})
 	mux.HandleFunc("POST /v1/auth/register", api.register)
 	mux.HandleFunc("POST /v1/auth/login", api.login)
+	mux.HandleFunc("POST /v1/auth/forgot-password", api.forgotPassword)
+	mux.HandleFunc("POST /v1/auth/reset-password", api.resetPassword)
 	mux.Handle("GET /v1/me", api.requireUser(http.HandlerFunc(api.me)))
 	mux.Handle("PATCH /v1/me", api.requireUser(http.HandlerFunc(api.updateProfile)))
 	mux.Handle("DELETE /v1/auth/session", api.requireUser(http.HandlerFunc(api.logout)))

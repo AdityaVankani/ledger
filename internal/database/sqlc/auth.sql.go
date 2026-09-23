@@ -102,3 +102,41 @@ func (q *Queries) GetUserIDBySessionTokenHash(ctx context.Context, tokenHash []b
 	err := row.Scan(&userID)
 	return userID, err
 }
+
+type CreatePasswordResetParams struct {
+	UserID    string
+	TokenHash []byte
+	ExpiresAt time.Time
+}
+
+func (q *Queries) CreatePasswordReset(ctx context.Context, arg CreatePasswordResetParams) error {
+	_, err := q.db.Exec(ctx, `
+		INSERT INTO password_resets (user_id, token_hash, expires_at)
+		VALUES ($1, $2, $3)`, arg.UserID, arg.TokenHash, arg.ExpiresAt)
+	return err
+}
+
+func (q *Queries) GetUserIDByPasswordResetTokenHash(ctx context.Context, tokenHash []byte) (string, error) {
+	row := q.db.QueryRow(ctx, `
+		SELECT user_id::text
+		FROM password_resets
+		WHERE token_hash = $1 AND expires_at > now()`, tokenHash)
+	var userID string
+	err := row.Scan(&userID)
+	return userID, err
+}
+
+func (q *Queries) UpdateUserPassword(ctx context.Context, userID, passwordHash string) error {
+	_, err := q.db.Exec(ctx, `
+		UPDATE users
+		SET password_hash = $2, updated_at = now()
+		WHERE id = $1`, userID, passwordHash)
+	return err
+}
+
+func (q *Queries) DeletePasswordReset(ctx context.Context, tokenHash []byte) error {
+	_, err := q.db.Exec(ctx, `
+		DELETE FROM password_resets
+		WHERE token_hash = $1`, tokenHash)
+	return err
+}

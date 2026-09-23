@@ -61,6 +61,20 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
+type forgotPasswordRequest struct {
+	Email string `json:"email"`
+}
+
+type resetPasswordRequest struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
+type resetPasswordResponse struct {
+	Message    string `json:"message"`
+	ResetToken string `json:"reset_token,omitempty"`
+}
+
 type updateProfileRequest struct {
 	UPIID string `json:"upi_id"`
 }
@@ -170,6 +184,85 @@ func (a *api) login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (a *api) forgotPassword(w http.ResponseWriter, r *http.Request) {
+	var input forgotPasswordRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	response := resetPasswordResponse{Message: "If an account exists for that email, a reset link has been created."}
+	email := strings.ToLower(strings.TrimSpace(input.Email))
+	if email == "" {
+		writeJSON(w, http.StatusAccepted, response)
+		return
+	}
+	user, err := a.queries.GetUserByEmail(r.Context(), email)
+	if err != nil {
+		writeJSON(w, http.StatusAccepted, response)
+		return
+	}
+	rawToken := make([]byte, 32)
+	if _, err := rand.Read(rawToken); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create reset token")
+		return
+	}
+	token := base64.RawURLEncoding.EncodeToString(rawToken)
+	tokenHash := sha256.Sum256([]byte(token))
+	if err := a.queries.CreatePasswordReset(r.Context(), sqlc.CreatePasswordResetParams{
+		UserID: user.ID, TokenHash: tokenHash[:], ExpiresAt: time.Now().UTC().Add(30 * time.Minute),
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create reset token")
+		return
+	}
+	response.ResetToken = token
+	writeJSON(w, http.StatusAccepted, response)
+}
+
+func (a *api) resetPassword(w http.ResponseWriter, r *http.Request) {
+	var input resetPasswordRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.Token == "" {
+		writeError(w, http.StatusBadRequest, "reset token is required")
+		return
+	}
+	if err := validatePassword(input.Password); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	tokenHash := sha256.Sum256([]byte(input.Token))
+	tx, err := a.pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	queries := a.queries.WithTx(tx)
+	userID, err := queries.GetUserIDByPasswordResetTokenHash(r.Context(), tokenHash[:])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "reset token is invalid or expired")
+		return
+	}
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not secure password")
+		return
+	}
+	if err := queries.UpdateUserPassword(r.Context(), userID, string(passwordHash)); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not update password")
+		return
+	}
+	if err := queries.DeletePasswordReset(r.Context(), tokenHash[:]); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not finish password reset")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not finish password reset")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "password updated"})
+}
+
 func (a *api) createSession(ctx context.Context, tx pgx.Tx, user userResponse) (authResponse, error) {
 	rawToken := make([]byte, 32)
 	if _, err := rand.Read(rawToken); err != nil {
@@ -192,7 +285,11 @@ func validateRegistration(input registerRequest) error {
 	if len(input.DisplayName) < 1 || len(input.DisplayName) > 100 {
 		return errors.New("display_name must be between 1 and 100 characters")
 	}
-	if len(input.Password) < 12 || len(input.Password) > 72 {
+	return validatePassword(input.Password)
+}
+
+func validatePassword(password string) error {
+	if len(password) < 12 || len(password) > 72 {
 		return errors.New("password must be between 12 and 72 characters")
 	}
 	return nil

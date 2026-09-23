@@ -27,3 +27,21 @@ VALUES ($1, $2, $3);
 SELECT user_id::text
 FROM auth_sessions
 WHERE token_hash = $1 AND expires_at > now();
+
+-- name: CreatePasswordReset :exec
+INSERT INTO password_resets (user_id, token_hash, expires_at)
+VALUES ($1, $2, $3);
+
+-- name: GetUserIDByPasswordResetTokenHash :one
+SELECT user_id::text
+FROM password_resets
+WHERE token_hash = $1 AND expires_at > now();
+
+-- name: UpdateUserPassword :exec
+UPDATE users
+SET password_hash = $2, updated_at = now()
+WHERE id = $1;
+
+-- name: DeletePasswordReset :exec
+DELETE FROM password_resets
+WHERE token_hash = $1;
